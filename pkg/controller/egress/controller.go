@@ -486,6 +486,6 @@ func (c *EgressController) updateEgressStatusCondition(obj interface{}, statusTy
 	}
 	_, err := c.crdClient.CrdV1alpha2().Egresses().UpdateStatus(context.TODO(), toUpdate, metav1.UpdateOptions{})
 	if err != nil {
-		klog.ErrorS(err, "error updating egress status", "egress", egress.Name)
+		klog.ErrorS(err, "Error updating Egress status", "egress", egress.Name)
 	}
 }
