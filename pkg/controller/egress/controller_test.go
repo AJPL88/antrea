@@ -767,3 +767,76 @@ func checkExternalIPPoolUsed(t *testing.T, controller *egressController, poolNam
 	})
 	assert.NoError(t, err)
 }
+
+func TestEgressStatus(t *testing.T) {
+	tests := []struct {
+		name                          string
+		existingEgresses              []*v1alpha2.Egress
+		existingExternalIPPool        *v1beta1.ExternalIPPool
+		inputEgress                   *v1alpha2.Egress
+		expectedEgressConditionType   v1alpha2.EgressConditionType
+		expectedEgressConditionStatus v1.ConditionStatus
+	}{
+		{
+			name:                   "Available IP to be allocated",
+			existingExternalIPPool: newExternalIPPool("ipPoolA", "1.1.1.0/24", "", ""),
+			inputEgress: &v1alpha2.Egress{
+				ObjectMeta: metav1.ObjectMeta{Name: "egressA", UID: "uidA"},
+				Spec: v1alpha2.EgressSpec{
+					EgressIP:       "",
+					ExternalIPPool: "ipPoolA",
+				},
+			},
+			expectedEgressConditionType:   v1alpha2.IPAllocated,
+			expectedEgressConditionStatus: v1.ConditionTrue,
+		},
+		{
+			name:                   "No available IP to be allocated",
+			existingExternalIPPool: newExternalIPPool("ipPoolA", "1.1.1.0/32", "", ""),
+			existingEgresses: []*v1alpha2.Egress{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "egressA", UID: "uidA"},
+					Spec: v1alpha2.EgressSpec{
+						EgressIP:       "",
+						ExternalIPPool: "ipPoolA",
+					},
+				},
+			},
+			inputEgress: &v1alpha2.Egress{
+				ObjectMeta: metav1.ObjectMeta{Name: "egressB", UID: "uidB"},
+				Spec: v1alpha2.EgressSpec{
+					EgressIP:       "",
+					ExternalIPPool: "ipPoolA",
+				},
+			},
+			expectedEgressConditionType:   v1alpha2.IPAllocated,
+			expectedEgressConditionStatus: v1.ConditionFalse,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stopCh := make(chan struct{})
+			defer close(stopCh)
+			var fakeObjects []runtime.Object
+			fakeObjects = append(fakeObjects, tt.inputEgress, tt.existingExternalIPPool)
+			controller := newController(nil, fakeObjects)
+			controller.informerFactory.Start(stopCh)
+			controller.crdInformerFactory.Start(stopCh)
+			controller.informerFactory.WaitForCacheSync(stopCh)
+			controller.crdInformerFactory.WaitForCacheSync(stopCh)
+			go controller.externalIPAllocator.Run(stopCh)
+			require.True(t, cache.WaitForCacheSync(stopCh, controller.externalIPAllocator.HasSynced))
+			controller.restoreIPAllocations(tt.existingEgresses)
+			controller.addEgress(tt.inputEgress)
+			controller.syncEgressIP(tt.inputEgress)
+
+			eg, err := controller.crdClient.CrdV1alpha2().Egresses().Get(context.TODO(), tt.inputEgress.Name, metav1.GetOptions{})
+			assert.NoError(t, err)
+
+			assert.Eventually(t, func() bool {
+				assert.NotEmpty(t, eg.Status.Conditions)
+				return assert.Equal(t, tt.expectedEgressConditionStatus, eg.Status.Conditions[0].Status) && assert.Equal(t, tt.expectedEgressConditionType, eg.Status.Conditions[0].Type)
+			}, time.Second, 50*time.Millisecond, "Egress status was not updated properly")
+		})
+	}
+}

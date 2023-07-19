@@ -402,6 +402,7 @@ func (c *EgressController) enqueueEgressGroup(key string) {
 // addEgress processes Egress ADD events and creates corresponding EgressGroup.
 func (c *EgressController) addEgress(obj interface{}) {
 	egress := obj.(*egressv1alpha2.Egress)
+	c.updateEgressStatusCondition(obj, egressv1alpha2.IPAllocated, false)
 	klog.InfoS("Processing Egress ADD event", "egress", egress.Name, "selector", egress.Spec.AppliedTo)
 	// Create an EgressGroup object corresponding to this Egress and enqueue task to the workqueue.
 	egressGroup := &antreatypes.EgressGroup{
@@ -426,6 +427,7 @@ func (c *EgressController) updateEgress(old, cur interface{}) {
 		groupSelector := antreatypes.NewGroupSelector("", curEgress.Spec.AppliedTo.PodSelector, curEgress.Spec.AppliedTo.NamespaceSelector, nil, nil)
 		c.groupingInterface.AddGroup(egressGroupType, curEgress.Name, groupSelector)
 	}
+	c.updateEgressStatusCondition(cur, egressv1alpha2.IPAllocated, c.ipAllocationMap[curEgress.Name] != nil)
 	if oldEgress.GetGeneration() != curEgress.GetGeneration() {
 		c.queue.Add(curEgress.Name)
 	}
@@ -447,5 +449,43 @@ func (c *EgressController) enqueueEgresses(poolName string) {
 	for _, object := range objects {
 		egress := object.(*egressv1alpha2.Egress)
 		c.queue.Add(egress.Name)
+	}
+}
+
+// updateEgressStatusCondition updates a Condition in an Egress's Status.
+func (c *EgressController) updateEgressStatusCondition(obj interface{}, statusType egressv1alpha2.EgressConditionType, statusBool bool) {
+	egress := obj.(*egressv1alpha2.Egress)
+	var status v1.ConditionStatus
+	if statusBool {
+		status = v1.ConditionTrue
+	} else {
+		status = v1.ConditionFalse
+	}
+	toUpdate := egress.DeepCopy()
+	allo := false
+	for i, v := range egress.Status.Conditions {
+		if v.Type == egressv1alpha2.IPAllocated && v.Status == status {
+			return
+		} else if v.Type == egressv1alpha2.IPAllocated {
+			toUpdate.Status.Conditions[i] = egressv1alpha2.EgressCondition{
+				Type:               statusType,
+				Status:             status,
+				LastTransitionTime: metav1.Now(),
+			}
+			allo = true
+		}
+	}
+	if !allo {
+		toUpdate.Status.Conditions = append(egress.Status.Conditions,
+			egressv1alpha2.EgressCondition{
+				Type:               statusType,
+				Status:             status,
+				LastTransitionTime: metav1.Now(),
+			},
+		)
+	}
+	_, err := c.crdClient.CrdV1alpha2().Egresses().UpdateStatus(context.TODO(), toUpdate, metav1.UpdateOptions{})
+	if err != nil {
+		klog.ErrorS(err, "error updating egress status", "egress", egress.Name)
 	}
 }
