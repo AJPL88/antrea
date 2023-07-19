@@ -835,12 +835,11 @@ func TestEgressStatus(t *testing.T) {
 				t.Error(err)
 			}
 			controller.syncEgressIP(eg)
-			t.Log(eg)
-			t.Log(eg.Status.Conditions[0])
-			t.Log(controller.ipAllocationMap)
-
-			assert.Equal(t, tt.expectedEgressConditionStatus, eg.Status.Conditions[0].Status)
-			assert.Equal(t, tt.expectedEgressConditionType, eg.Status.Conditions[0].Type)
+			assert.Eventually(t, func() bool {
+				return assert.Equal(t, tt.expectedEgressConditionStatus, eg.Status.Conditions[0].Status) && assert.Equal(t, tt.expectedEgressConditionType, eg.Status.Conditions[0].Type)
+			}, time.Second, 50*time.Millisecond)
+			// assert.Equal(t, tt.expectedEgressConditionStatus, eg.Status.Conditions[0].Status)
+			// assert.Equal(t, tt.expectedEgressConditionType, eg.Status.Conditions[0].Type)
 		})
 	}
 }
