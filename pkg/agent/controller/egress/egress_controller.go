@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -583,6 +584,30 @@ func (c *EgressController) updateEgressStatus(egress *crdv1a2.Egress, egressIP s
 			}
 			toUpdate.Status.EgressNode = ""
 			toUpdate.Status.EgressIP = ""
+		}
+		var status v1.ConditionStatus
+		if toUpdate.Status.EgressNode != "" {
+			status = v1.ConditionTrue
+		} else {
+			status = v1.ConditionFalse
+		}
+		allo := false
+		for i, v := range toUpdate.Status.Conditions {
+			if v.Type == crdv1a2.IPAssigned {
+				toUpdate.Status.Conditions[i] = crdv1a2.EgressCondition{
+					Type:               crdv1a2.IPAssigned,
+					Status:             status,
+					LastTransitionTime: metav1.Now(),
+				}
+				allo = true
+			}
+		}
+		if !allo {
+			toUpdate.Status.Conditions = append(toUpdate.Status.Conditions, crdv1a2.EgressCondition{
+				Type:               crdv1a2.IPAssigned,
+				Status:             status,
+				LastTransitionTime: metav1.Now(),
+			})
 		}
 		klog.V(2).InfoS("Updating Egress status", "Egress", egress.Name, "oldNode", egress.Status.EgressNode, "newNode", toUpdate.Status.EgressNode)
 		_, updateErr = c.crdClient.CrdV1alpha2().Egresses().UpdateStatus(context.TODO(), toUpdate, metav1.UpdateOptions{})
